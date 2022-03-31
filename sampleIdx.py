@@ -65,3 +65,43 @@ class getPosNegIdx(): # 输入一个样本的索引，输出一维列表，列�
 
         pos_and_neg_idx += negIdx
         return pos_and_neg_idx
+
+
+class getPosNegIdx():
+    def __init__(self,targets, pos_num, neg_num) -> None: 
+        """
+        targets: 每个训练集数据的标签
+        pos_num: 为每个样本采样几个正样本
+        neg_num: 为每个样本采样几个负样本
+        """
+        self.pos_num = pos_num
+        self.neg_num = neg_num
+        n_data = len(targets) # 训练集的数据量
+        dataIdx_set = np.array(list(range(n_data)), dtype=int) # 训练集每个数据的索引
+        self.c_num = len(set(targets)) # 类别个数
+        self.class_idx = [] # 每个类别的索引
+        targets = np.array(targets, dtype=int)
+        for c in range(self.c_num):
+            tmp = dataIdx_set[targets == c]
+            tmp = list(tmp)
+            self.class_idx.append(tmp)
+    
+    def __call__(self,target) -> list: # 返回一个list
+        """
+        target: 当前样本的类别
+        """
+        pos_candidate = self.class_idx[target] # 正样本从同类中采样
+        neg_candidate = []
+        for c in range(self.c_num):
+            if target == c:continue
+            neg_candidate += self.class_idx[c] # 负样本从不同类中采样
+        
+        p_n = min(self.pos_num, len(pos_candidate))
+        n_n = min(self.neg_num, len(neg_candidate))
+
+        pos_idx = random.sample(pos_candidate, p_n) # 采样得到的正样本索引
+        neg_idx = random.sample(neg_candidate, n_n) # 采样得到的负样本索引
+
+        pos_and_neg_idx = pos_idx + neg_idx
+        return pos_and_neg_idx
+

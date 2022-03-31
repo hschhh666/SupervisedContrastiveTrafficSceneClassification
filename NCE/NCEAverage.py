@@ -1,8 +1,66 @@
+from turtle import forward
 from numpy import dtype
 import torch
 from torch import nn
 from sampleIdx import getPosNegIdx
 import math
+
+
+
+class SupConLoss(nn.Module):
+    def __init__(self, datasetLen, dataset_targets, pos_num, neg_num, feat_dim = 64, T=0.2, momentum=0.9):
+        super(SupConLoss, self).__init__()
+        self.T = T
+        self.m = momentum
+        self.datasetLen = datasetLen
+        self.feat_dim = feat_dim
+        self.pos_num = pos_num
+        self.neg_num = neg_num
+
+        stdv = 1. / math.sqrt(feat_dim / 3)
+        self.register_buffer('memory', torch.rand(datasetLen, feat_dim).mul_(2 * stdv).add_(-stdv)) # outputSize指的是样本总数，inputSize指的是特征维度
+        self.get_pos_neg_idx = getPosNegIdx(dataset_targets, pos_num, neg_num)
+    
+    def forward(self, anchor_feat, batch_targets, batch_index):
+        T, momentum, batchSize, feat_dim, pos_num, neg_num = self.T, self.m, anchor_feat.size(0), self.feat_dim, self.pos_num, self.neg_num
+
+        idx = []
+        for t in batch_targets:
+            t = t.cpu().item()
+            idx.append(self.get_pos_neg_idx(t))
+        idx = torch.tensor(idx,dtype=int).cuda()
+
+        memory_feat = torch.index_select(self.memory,0,idx.view(-1)).detach()
+        memory_feat = memory_feat.view(batchSize, pos_num + neg_num, feat_dim)
+        mutualInfo = torch.bmm(memory_feat, anchor_feat.view(batchSize, feat_dim,1))
+
+        
+        mutualInfo = torch.div(mutualInfo, T)
+        mutualInfo = mutualInfo.contiguous() # 大小是batchSize * (pos_num + neg_num)，对于每一行来说，前pos_num列是anchor与正样本的相似度，后neg_num是anchor与负样本的相似度
+
+        exp_mutualInfo = torch.exp(mutualInfo)
+
+        pos_mutualInfo = mutualInfo[:,0:pos_num] # 这里不用取exp
+        pos_sum = pos_mutualInfo.sum(1,keepdim=True)
+
+        all_sum = exp_mutualInfo.sum(1,keepdim=True) # 其实就是分母
+
+        single_loss = (pos_sum / pos_num) - torch.log(all_sum)
+        loss = -single_loss.mean()
+
+        # # update memory
+        with torch.no_grad():
+            feat = torch.index_select(self.memory, 0, batch_index.view(-1))
+            feat.mul_(momentum)
+            feat.add_(torch.mul(anchor_feat, 1 - momentum))
+            norm = feat.pow(2).sum(1, keepdim=True).pow(0.5)
+            updated = feat.div(norm)
+            self.memory.index_copy_(0, batch_index, updated)
+
+        return loss
+
+        
+        
 
 
 class NCEAverage(nn.Module):

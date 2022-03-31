@@ -17,11 +17,11 @@ from torchvision import transforms
 from dataset import myImageFolder
 
 from myModel import myResnet50
-from NCE.NCEAverage import NCEAverage, E2EAverage
+from NCE.NCEAverage import NCEAverage, E2EAverage, SupConLoss
 from NCE.NCECriterion import NCECriterion
 from NCE.NCECriterion import NCESoftmaxLoss
 
-from util import adjust_learning_rate, AverageMeter,print_running_time, Logger, check_pytorch_idx_validation, get_anchor_pos_neg
+from util import adjust_learning_rate, AverageMeter,print_running_time, Logger
 from sampleIdx import RandomBatchSamplerWithPosAndNeg
 from processFeature import process_feature
 
@@ -34,10 +34,10 @@ def parse_option():
     parser.add_argument('--print_freq', type=int, default=1, help='print every print_freq batchs')
     parser.add_argument('--tb_freq', type=int, default=500, help='tb frequency')
     parser.add_argument('--save_freq', type=int, default=10, help='save model checkpoint every save_freq epoch')
-    parser.add_argument('--batch_size', type=int, default=8, help='batch_size')
-    parser.add_argument('--num_workers', type=int, default=6, help='num of workers to use')
-    parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
-    parser.add_argument('--contrastMethod', type=str, default='e2e',choices=['e2e', 'membank'], help='method of contrast, e2e or membank')
+    parser.add_argument('--batch_size', type=int, default=128, help='batch_size')
+    parser.add_argument('--num_workers', type=int, default=12, help='num of workers to use')
+    parser.add_argument('--epochs', type=int, default=400, help='number of training epochs')
+    parser.add_argument('--contrastMethod', type=str, default='membank',choices=['e2e', 'membank'], help='method of contrast, e2e or membank')
 
     # optimizer parameters
     parser.add_argument('--learning_rate', type=float, default=0.03, help='learning rate')
@@ -49,11 +49,10 @@ def parse_option():
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')    
 
     # network parameters
-    parser.add_argument('--softmax', action='store_true', help='using softmax contrastive loss rather than NCE')
-    parser.add_argument('--nce_k', type=int, default=14) # negative sample number
+    parser.add_argument('--pos_num', type=int, default=49) # positive sample number
+    parser.add_argument('--neg_num', type=int, default=150) # negative sample number
     parser.add_argument('--nce_t', type=float, default=0.2) # temperature parameter
     parser.add_argument('--nce_m', type=float, default=0.9) # memory update rate
-    parser.add_argument('--global_neg_percent', type=float, default=0.3) # 在负样本中，至少有百分之多少的是全局随机采样的，而剩下的是从标注的负样本中采样的
     parser.add_argument('--feat_dim', type=int, default=64, help='dim of feat for inner product') # dimension of network's output
 
     # specify folder
@@ -63,9 +62,7 @@ def parse_option():
     parser.add_argument('--resume', default='', type=str, metavar='PATH',help='path to latest checkpoint (default: none)')
 
     # 其他参数
-    parser.add_argument('--crop_low', type=float, default=0.8, help='low area in crop')
     parser.add_argument('--comment_info', type=str, default='', help='Comment message, donot influence program')
-    parser.add_argument('--sample_dict', type=str, default='')
     parser.add_argument('--load_img_to_memory', action='store_true', help='load all images into memory to speed up')
     args = parser.parse_args()
 
@@ -74,9 +71,8 @@ def parse_option():
     for it in iterations:
         args.lr_decay_epochs.append(int(it))
 
-    args.method = 'softmax' if args.softmax else 'nce'
     curTime = time.strftime("%Y%m%d_%H_%M_%S", time.localtime())    
-    args.model_name = '{}_lossMethod_{}_NegNum_{}_lr_{}_decay_{}_bsz_{}_featDim_{}_{}'.format(curTime, args.method, args.nce_k, args.learning_rate,
+    args.model_name = '{}_PosNum_{}_NegNum_{}_lr_{}_decay_{}_bsz_{}_featDim_{}_{}'.format(curTime, args.pos_num, args.neg_num, args.learning_rate,
                                                                             args.weight_decay, args.batch_size, args.feat_dim, args.comment_info)
 
     # 路径创建与检查
@@ -128,6 +124,7 @@ def get_train_loader(args):
     train_dataset = myImageFolder(data, transform=augmentation, memory = args.load_img_to_memory)
     args.n_data = len(train_dataset)
     print('number of train samples: {}'.format(args.n_data))
+    args.dataset_targets = train_dataset.targets
 
     if args.contrastMethod == 'e2e':
         batch_sampler = RandomBatchSamplerWithPosAndNeg(train_dataset, args=args)
@@ -150,21 +147,18 @@ def set_model(args):
         model.load_state_dict(ckpt['model'])
         print('==> done')
 
-    contrast = 'placeholder'
     if args.contrastMethod == 'membank':
-        contrast = NCEAverage(args.feat_dim, args.n_data, args.sample_dict, args.global_neg_percent, args.nce_k, args.nce_t, args.nce_m, args.softmax)
+        criterion = SupConLoss(args.n_data,args.dataset_targets,args.pos_num, args.neg_num, args.feat_dim, args.nce_t, args.nce_m)
+
     elif args.contrastMethod == 'e2e':
         contrast = E2EAverage(args.nce_k, args.n_data, args.nce_t, args.softmax)
 
-    criterion = NCESoftmaxLoss() if args.softmax else NCECriterion(args.n_data)
-
     if torch.cuda.is_available():
         model = model.cuda()
-        contrast = contrast.cuda()
         criterion = criterion.cuda()
         cudnn.benchmark = True
 
-    return model, contrast, criterion
+    return model, criterion
 
 def set_optimizer(args, model):
     # return optimizer
@@ -192,6 +186,7 @@ def train_e2e(epoch,train_loader, model, contrast, criterion, optimizer, args):
 
         # ===================forward=====================
         feat = model(img)
+        loss = criterion(feat,target, index)
         mutualInfo = contrast(feat)
         loss = criterion(mutualInfo)
         prob = mutualInfo[:,0].mean()
@@ -226,14 +221,12 @@ def train_e2e(epoch,train_loader, model, contrast, criterion, optimizer, args):
 
 
 
-def train_mem_bank(epoch,train_loader, model, contrast, criterion, optimizer, args):
+def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
     model.train()
-    contrast.train()
 
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
-    probs = AverageMeter()
 
     end = time.time()
     for idx,(img, target, index) in enumerate(train_loader):
@@ -247,10 +240,8 @@ def train_mem_bank(epoch,train_loader, model, contrast, criterion, optimizer, ar
 
         # ===================forward=====================
         feat = model(img)
-        mutualInfo = contrast(feat, index)
-        loss = criterion(mutualInfo)
-        prob = mutualInfo[:,0].mean()
-        prob = 1/torch.exp(loss)
+        loss = criterion(feat, target, index)
+
 
         # ===================backward=====================
         optimizer.zero_grad()
@@ -259,7 +250,6 @@ def train_mem_bank(epoch,train_loader, model, contrast, criterion, optimizer, ar
 
         # ===================meters=====================
         losses.update(loss.item(), bsz)
-        probs.update(prob.item(), bsz)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -272,12 +262,12 @@ def train_mem_bank(epoch,train_loader, model, contrast, criterion, optimizer, ar
                   'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'loss {loss.val:.3f} ({loss.avg:.3f})\t'
-                  'p {probs.val:.3f} ({probs.avg:.3f})'.format(
+                  .format(
                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, probs=probs,))
+                   data_time=data_time, loss=losses, ))
             sys.stdout.flush()
 
-    return losses.avg, probs.avg
+    return losses.avg
 
 
 def main():
@@ -289,7 +279,7 @@ def main():
     train_loader = get_train_loader(args)
 
     # set the model
-    model, contrast, criterion = set_model(args)
+    model, criterion = set_model(args)
 
     # set the optimizer
     optimizer = set_optimizer(args, model)
@@ -306,9 +296,9 @@ def main():
         adjust_learning_rate(epoch, args, optimizer)
 
         if args.contrastMethod == 'e2e':
-            loss, prob = train_e2e(epoch, train_loader, model, contrast, criterion, optimizer, args)
+            loss, prob = train_e2e(epoch, train_loader, model, criterion, optimizer, args)
         else:
-            loss, prob = train_mem_bank(epoch, train_loader, model, contrast, criterion, optimizer, args)
+            loss, prob = train_mem_bank(epoch, train_loader, model, criterion, optimizer, args)
 
         print_running_time(start_time)
 
@@ -318,7 +308,6 @@ def main():
             state = {
                 'args': args,
                 'model': model.state_dict(),
-                'contrast': contrast.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
             }
@@ -338,7 +327,6 @@ def main():
             state = {
                 'args': args,
                 'model': model.state_dict(),
-                'contrast': contrast.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'epoch': epoch,
             }
