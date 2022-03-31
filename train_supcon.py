@@ -24,6 +24,7 @@ from NCE.NCECriterion import NCESoftmaxLoss
 from util import adjust_learning_rate, AverageMeter,print_running_time, Logger
 from sampleIdx import RandomBatchSamplerWithPosAndNeg
 from processFeature import process_feature
+import tensorboard_logger as tb_logger
 
 
 
@@ -79,6 +80,7 @@ def parse_option():
     args.model_path = os.path.join(args.running_save_path, 'modelPath')
     args.log_txt_path = os.path.join(args.running_save_path, 'logPath')
     args.result_path = os.path.join(args.running_save_path, 'resultPath')
+    args.tb_folder = os.path.join(args.running_save_path, 'tbPath')
     if (args.data is None) or (args.model_path is None)  or (args.log_txt_path is None) or (args.result_path is None) or (args.test_data_folder is None):
         raise ValueError('one or more of the folders is None: data | model_path | log_txt_path | result_path | test_data_folder')
     if not os.path.isdir(args.data):
@@ -94,6 +96,12 @@ def parse_option():
     args.result_path = os.path.join(args.result_path, args.model_name)
     if not os.path.isdir(args.result_path):
         os.makedirs(args.result_path)
+    
+
+    args.tb_folder = os.path.join(args.tb_folder, args.model_name)
+    if not os.path.isdir(args.tb_folder):
+        os.makedirs(args.tb_folder)
+    
     
     log_file_name = os.path.join(args.log_txt_path, 'log_'+args.model_name+'.txt') 
     sys.stdout = Logger(log_file_name) # 把print的东西输出到txt文件中
@@ -285,7 +293,7 @@ def main():
     optimizer = set_optimizer(args, model)
 
     # tensorboard
-    # logger = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
+    logger = tb_logger.Logger(logdir=args.tb_folder, flush_secs=2)
 
     # train by epoch
     print('start training at ' + time.strftime("%Y_%m_%d %H:%M:%S", time.localtime()))
@@ -298,9 +306,13 @@ def main():
         if args.contrastMethod == 'e2e':
             loss, prob = train_e2e(epoch, train_loader, model, criterion, optimizer, args)
         else:
-            loss, prob = train_mem_bank(epoch, train_loader, model, criterion, optimizer, args)
+            loss = train_mem_bank(epoch, train_loader, model, criterion, optimizer, args)
 
         print_running_time(start_time)
+
+        # tensorboard logger
+        logger.log_value('loss', loss, epoch)
+        logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         # save model
         if epoch % args.save_freq == 0:
