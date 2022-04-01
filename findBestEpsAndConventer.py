@@ -18,7 +18,7 @@ from util import Logger,print_running_time
 
 
 dataset_path = '/home/hsc/Research/TrafficSceneClassification/data/fineGrain/dataset5'
-feat_path = '/home/hsc/Research/TrafficSceneClassification/code/testExperiment/SupContrast/save/SupCon/path_models/20220330_17_22_13_SupCon_path_resnet50_lr_0.5_decay_0.0001_bsz_100_temp_0.1_trial_0'
+feat_path = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/resultPath/20220401_11_51_45_PosNum_600_NegNum_1200_lr_0.03_decay_0.0001_bsz_128_featDim_64_'
 
 log_file_name = os.path.join(feat_path, 'clusterAndEvaluation.txt') 
 sys.stdout = Logger(log_file_name) # 把print的东西输出到txt文件中
@@ -44,7 +44,10 @@ eps = 0.3
 colars = ['red',(112/255,173/255,71/255),(149/255,72/255,162/255),(2/255,176/255,240/255)]
 
 
-cluster_model = DBSCAN(eps=eps,min_samples=50, metric='cosine').fit(train_feat)
+# cluster_model = DBSCAN(eps=eps,min_samples=50, metric='cosine').fit(train_feat)
+# cluster_label = cluster_model.labels_
+
+cluster_model = KMeans(n_clusters=4).fit(train_feat)
 cluster_label = cluster_model.labels_
 
 for i in range(len(set(cluster_label))):
