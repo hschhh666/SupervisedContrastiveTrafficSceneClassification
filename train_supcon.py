@@ -147,10 +147,8 @@ def set_model(args):
     model = myResnet50(args.feat_dim, pretrained=True)
 
     if args.resume:
-        if torch.cuda.is_available():
-            ckpt = torch.load(args.resume)
-        else:
-            ckpt = torch.load(args.resume,map_location=torch.device('cpu'))
+
+        ckpt = torch.load(args.resume,map_location=torch.device('cpu'))
         print("==> loaded pre-trained checkpoint '{}' (epoch {})".format(args.resume, ckpt['epoch']))
         model.load_state_dict(ckpt['model'])
         print('==> done')
@@ -246,9 +244,10 @@ def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
             index = index.cuda()
             img = img.cuda()
 
+        only_save_feat = (epoch == 0)
         # ===================forward=====================
         feat = model(img)
-        loss = criterion(feat, target, index)
+        loss = criterion(feat, target, index, only_save_feat)
 
 
         # ===================backward=====================
@@ -263,6 +262,15 @@ def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
             torch.cuda.synchronize()
         batch_time.update(time.time() - end)
         end = time.time()
+
+        if epoch == 0: #如果在恢复期
+            print('Restoring memory bank: [{}/{}]\t'
+            'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+            'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
+            .format(idx + 1, len(train_loader), batch_time=batch_time,
+                   data_time=data_time))
+            sys.stdout.flush()
+            continue
 
         # print info
         if (idx + 1) % args.print_freq == 0:
@@ -281,7 +289,10 @@ def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
 def main():
     # parse the args
     args = parse_option()
-    args.start_epoch = 1
+    if args.resume:
+        args.start_epoch = 0
+    else:
+        args.start_epoch = 1
 
     # set the loader
     train_loader = get_train_loader(args)
@@ -309,6 +320,9 @@ def main():
             loss = train_mem_bank(epoch, train_loader, model, criterion, optimizer, args)
 
         print_running_time(start_time)
+        if epoch == 0: 
+            print('Restore memory bank: Done. Start training now.')
+            continue # 仅当resume时epoch才会从0开始
 
         # tensorboard logger
         logger.log_value('loss', loss, epoch)

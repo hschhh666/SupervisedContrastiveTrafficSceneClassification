@@ -21,7 +21,7 @@ class SupConLoss(nn.Module):
         self.register_buffer('memory', torch.rand(datasetLen, feat_dim).mul_(2 * stdv).add_(-stdv)) # outputSize指的是样本总数，inputSize指的是特征维度
         self.get_pos_neg_idx = getPosNegIdx(dataset_targets, pos_num, neg_num)
     
-    def forward(self, anchor_feat, batch_targets, batch_index):
+    def forward(self, anchor_feat, batch_targets, batch_index, only_save_feat = False):
         T, momentum, batchSize, feat_dim, pos_num, neg_num = self.T, self.m, anchor_feat.size(0), self.feat_dim, self.pos_num, self.neg_num
 
         idx = []
@@ -56,6 +56,8 @@ class SupConLoss(nn.Module):
             norm = feat.pow(2).sum(1, keepdim=True).pow(0.5)
             updated = feat.div(norm)
             self.memory.index_copy_(0, batch_index, updated)
+            if only_save_feat: # 直接把原始的特征保存下来了。这种情况仅发生在resume时，即继续训练某个未完成的模型。
+                self.memory.index_copy_(0, batch_index, anchor_feat)
 
         return loss
 
