@@ -159,11 +159,11 @@ def process_feature(args): # 其实这个函数就相当于主程序了
     np.save(os.path.join(args.result_path, 'train_targets.npy'), targets)
     # 可视化特征
     
-    print('Visulization train set feature...')
-    save_name = 'train_feat_before_fc_vis.png'
-    vis_feat(feat[0], targets, save_name, args)
-    save_name = 'train_feat_after_fc_vis.png'
-    vis_feat(feat[1], targets, save_name, args)
+    # print('Visulization train set feature...')
+    # save_name = 'train_feat_before_fc_vis.png'
+    # vis_feat(feat[0], targets, save_name, args)
+    # save_name = 'train_feat_after_fc_vis.png'
+    # vis_feat(feat[1], targets, save_name, args)
 
 
 
@@ -196,7 +196,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.feat_dim = 64
-    args.pretrained = '/home/hsc/Research/TrafficSceneClassification/code/testExperiment/SupContrast/save/SupCon/path_models/20220330_17_22_13_SupCon_path_resnet50_lr_0.5_decay_0.0001_bsz_100_temp_0.1_trial_0/ckpt_epoch_900.pth'
+    args.pretrained = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/modelPath/20220401_01_22_20_PosNum_200_NegNum_600_lr_0.03_decay_0.0001_bsz_128_featDim_64_/ckpt_epoch_100.pth'
     args.data = '/home/hsc/Research/TrafficSceneClassification/data/fineGrain/dataset5'
     start = time.time()
     process_feature(args)
