@@ -17,11 +17,11 @@ from torchvision import transforms
 from dataset import myImageFolder
 
 from myModel import myResnet50
-from NCE.NCEAverage import NCEAverage, E2EAverage, SupConLoss
+from NCE.NCEAverage import NCEAverage, E2EAverage, SupConLoss, kld_Criterion
 from NCE.NCECriterion import NCECriterion
 from NCE.NCECriterion import NCESoftmaxLoss
 
-from util import adjust_learning_rate, AverageMeter,print_running_time, Logger
+from util import adjust_learning_rate, AverageMeter,print_running_time, Logger, get_dataloader_mean_var, get_batch_mean_var
 from sampleIdx import RandomBatchSamplerWithPosAndNeg
 from processFeature import process_feature
 import tensorboard_logger as tb_logger
@@ -55,6 +55,8 @@ def parse_option():
     parser.add_argument('--nce_t', type=float, default=0.2) # temperature parameter
     parser.add_argument('--nce_m', type=float, default=0.9) # memory update rate
     parser.add_argument('--feat_dim', type=int, default=64, help='dim of feat for inner product') # dimension of network's output
+    parser.add_argument('--start_kld_loss_epoch', type=int, default=1) # 从哪个epoch开始优化kld loss
+    parser.add_argument('--kld_loss_lambda', type=float, default=1) # kld loss的权重, total loss = contra_loss + lambda * kld_loss
 
     # specify folder
     parser.add_argument('--data', type=str, default=None, help='path to training data') # 训练数据文件夹，即锚点/正负样本文件夹
@@ -113,8 +115,9 @@ def parse_option():
     return args
 
 
-def get_train_loader(args):
-    data = os.path.join(args.data, 'train')
+def get_data_loader(args):
+    train_data = os.path.join(args.data, 'train')
+    val_data = os.path.join(args.data, 'val')
 
     mean=[0.485, 0.456, 0.406]
     std=[0.229, 0.224, 0.225]
@@ -129,7 +132,7 @@ def get_train_loader(args):
         transforms.Normalize(mean=mean, std=std),
     ])
 
-    train_dataset = myImageFolder(data, transform=augmentation, memory = args.load_img_to_memory)
+    train_dataset = myImageFolder(train_data, transform=augmentation, memory = args.load_img_to_memory)
     args.n_data = len(train_dataset)
     print('number of train samples: {}'.format(args.n_data))
     args.dataset_targets = train_dataset.targets
@@ -139,8 +142,13 @@ def get_train_loader(args):
         train_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
     if args.contrastMethod == 'membank':
         train_loader = torch.utils.data.DataLoader(train_dataset,batch_size = args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
+    
+    val_dataset = myImageFolder(val_data, transform=augmentation, memory = args.load_img_to_memory)
+    val_loader = torch.utils.data.DataLoader(val_dataset,batch_size = args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True) # 这个不必随机打乱
 
-    return train_loader
+    args.class_num = len(set(train_dataset.targets))
+
+    return train_loader, val_loader
 
 def set_model(args):
 
@@ -159,12 +167,14 @@ def set_model(args):
     elif args.contrastMethod == 'e2e':
         contrast = E2EAverage(args.nce_k, args.n_data, args.nce_t, args.softmax)
 
+    kld_criterion = kld_Criterion()
+
     if torch.cuda.is_available():
         model = model.cuda()
         criterion = criterion.cuda()
         cudnn.benchmark = True
 
-    return model, criterion
+    return model, criterion, kld_criterion
 
 def set_optimizer(args, model):
     # return optimizer
@@ -227,12 +237,14 @@ def train_e2e(epoch,train_loader, model, contrast, criterion, optimizer, args):
 
 
 
-def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
+def train_mem_bank(epoch,train_loader,val_distribution, model, criterion, kld_criterion, optimizer, args):
     model.train()
 
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
+    total_losses = AverageMeter()
+    kld_losses = AverageMeter()
 
     end = time.time()
     for idx,(img, target, index) in enumerate(train_loader):
@@ -248,15 +260,24 @@ def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
         # ===================forward=====================
         feat = model(img)
         loss = criterion(feat, target, index, only_save_feat)
+        
+        kld_loss = torch.Tensor([0]).cuda()
+        if epoch >= args.start_kld_loss_epoch:
+            batch_distribution = get_batch_mean_var(feat, target, args)
+            kld_loss = kld_criterion(val_distribution, batch_distribution)
+
+        total_loss = loss + args.kld_loss_lambda * kld_loss
 
 
         # ===================backward=====================
         optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
 
         # ===================meters=====================
         losses.update(loss.item(), bsz)
+        total_losses.update(total_loss.item(),bsz)
+        kld_losses.update(kld_loss.item(),bsz)
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -277,13 +298,15 @@ def train_mem_bank(epoch,train_loader, model, criterion, optimizer, args):
             print('Train: [{0}][{1}/{2}]\t'
                   'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'loss {loss.val:.3f} ({loss.avg:.3f})\t'
+                  'contras_loss {loss.val:.3f} ({loss.avg:.3f})\t'
+                  'kld_loss {kld.val:.3f} ({kld.avg:.3f})\t'
+                  'total_loss {total.val:.3f} ({total.avg:.3f})\t'
                   .format(
                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, ))
+                   data_time=data_time, loss=losses, kld = kld_losses, total = total_losses))
             sys.stdout.flush()
 
-    return losses.avg
+    return losses.avg, kld_losses.avg, total_losses.avg
 
 
 def main():
@@ -295,10 +318,10 @@ def main():
         args.start_epoch = 1
 
     # set the loader
-    train_loader = get_train_loader(args)
+    train_loader, val_loader = get_data_loader(args)
 
     # set the model
-    model, criterion = set_model(args)
+    model, criterion, kld_criterion = set_model(args)
 
     # set the optimizer
     optimizer = set_optimizer(args, model)
@@ -314,10 +337,14 @@ def main():
     for epoch in range(args.start_epoch, args.epochs + 1):
         adjust_learning_rate(epoch, args, optimizer)
 
+        val_distribution = []
+        if epoch >= args.start_kld_loss_epoch:
+            val_distribution = get_dataloader_mean_var(model, val_loader, args)
+
         if args.contrastMethod == 'e2e':
             loss, prob = train_e2e(epoch, train_loader, model, criterion, optimizer, args)
         else:
-            loss = train_mem_bank(epoch, train_loader, model, criterion, optimizer, args)
+            contras_loss, kld_loss, total_loss = train_mem_bank(epoch, train_loader,val_distribution, model, criterion, kld_criterion, optimizer, args)
 
         print_running_time(start_time)
         if epoch == 0: 
@@ -325,7 +352,9 @@ def main():
             continue # 仅当resume时epoch才会从0开始
 
         # tensorboard logger
-        logger.log_value('loss', loss, epoch)
+        logger.log_value('contras_loss', contras_loss, epoch)
+        logger.log_value('kld_loss', kld_loss, epoch)
+        logger.log_value('total_loss', total_loss, epoch)
         logger.log_value('learning_rate', optimizer.param_groups[0]['lr'], epoch)
 
         # save model
@@ -344,10 +373,10 @@ def main():
             # help release GPU memory
             del state
 
-        if loss < min_loss:
+        if total_loss < min_loss:
             if min_loss != np.inf:
                 os.remove(best_model_path)
-            min_loss = loss
+            min_loss = total_loss
             best_model_path = os.path.join(args.model_folder, 'ckpt_epoch_{epoch}_Best.pth'.format(epoch=epoch))
             print('==> Saving best model...')
             state = {

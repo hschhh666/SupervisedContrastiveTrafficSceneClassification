@@ -62,7 +62,22 @@ class SupConLoss(nn.Module):
         return loss
 
         
-        
+class kld_Criterion(nn.Module):
+    def __init__(self):
+        super(kld_Criterion, self).__init__()
+
+    def forward(self,val_distribution, batch_distribution):
+        class_num = len(val_distribution[0])
+        total_loss = 0
+        for i in range(class_num):
+            mean1 = torch.Tensor(val_distribution[0][i]).cuda()
+            sigma1 = torch.Tensor(val_distribution[1][i]).cuda()
+
+            mean2 = batch_distribution[0][i]
+            sigma2 = batch_distribution[1][i]
+
+            total_loss += torch.log(sigma2/sigma1) - 0.5 + ((torch.pow(sigma1,2) + torch.pow(mean1 - mean2, 2)) / (2 * torch.pow(sigma2,2)))
+        return total_loss.mean()
 
 
 class NCEAverage(nn.Module):

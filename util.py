@@ -1,11 +1,53 @@
 from __future__ import print_function
-
 import torch
 import numpy as np
 import time
 import sys
 import os
 from scipy.spatial import distance
+
+
+def get_dataloader_mean_var(model, data_loader, args) -> list:
+    model.eval()
+    class_num = args.class_num
+    feat_dim = args.feat_dim
+    class_feature = [np.zeros((0,feat_dim)) for i in range(class_num)]
+    class_mean = [np.zeros(feat_dim) for i in range(class_num)]
+    class_std = [np.zeros(feat_dim) for i in range(class_num)]
+    with torch.no_grad():
+        for idx,(img, target, index) in enumerate(data_loader):
+            img = img.cuda()
+            batch_feature = model(img)
+            batch_feature = batch_feature.detach().cpu().numpy()
+            target = target.numpy()
+            for i in range(class_num):
+                tmp = batch_feature[target == i, :]
+                class_feature[i] = np.concatenate((class_feature[i], tmp), axis = 0)
+    for i in range(4):
+        res = class_feature[i]
+        class_mean[i] = np.average(res,axis = 0)
+        class_std[i] = np.std(res, axis = 0)
+
+    model.train()
+    return [class_mean, class_std]
+
+
+def get_batch_mean_var(feature, target, args) -> list:
+    class_num = args.class_num
+    feat_dim = args.feat_dim
+    class_mean = []
+    class_std = []
+    for i in range(class_num):
+        tmp_feat = feature[target == i, :]
+        if tmp_feat.shape[0] == 0:
+            c_mean = torch.zeros(feat_dim).cuda()
+            c_std = torch.zeros(feat_dim).cuda()
+        else:
+            c_mean = torch.mean(tmp_feat,dim=0)
+            c_std = torch.std(tmp_feat,dim=0)
+        class_mean.append(c_mean)
+        class_std.append(c_std)
+    return [class_mean, class_std]
 
 def print_running_time(start_time):
     print()
