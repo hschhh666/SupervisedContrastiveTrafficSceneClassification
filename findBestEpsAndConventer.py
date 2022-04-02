@@ -18,13 +18,13 @@ from util import Logger,print_running_time
 
 
 dataset_path = '/home/hsc/Research/TrafficSceneClassification/data/fineGrain/dataset5'
-feat_path = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/resultPath/20220401_11_51_45_PosNum_600_NegNum_1200_lr_0.03_decay_0.0001_bsz_128_featDim_64_'
+feat_path = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/resultPath/20220402_17_32_55_PosNum_1200_NegNum_1200_lr_0.03_decay_0.0001_bsz_128_featDim_64_testCode'
 
 log_file_name = os.path.join(feat_path, 'clusterAndEvaluation.txt') 
 sys.stdout = Logger(log_file_name) # 把print的东西输出到txt文件中
 
 train_data_path = os.path.join(dataset_path,'train')
-val_data_path = os.path.join(dataset_path,'val')
+val_data_path = os.path.join(dataset_path,'test')
 
 train_targets = ImageFolder(train_data_path).targets
 val_targets = ImageFolder(val_data_path).targets

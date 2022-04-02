@@ -4,6 +4,7 @@ This code refers to CMC:https://github.com/HobbitLong/CMC/#contrastive-multiview
 
 Author: Shaochi Hu
 """
+from glob import glob
 import os
 import sys
 import time
@@ -144,7 +145,7 @@ def get_data_loader(args):
         train_loader = torch.utils.data.DataLoader(train_dataset,batch_size = args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     
     val_dataset = myImageFolder(val_data, transform=augmentation, memory = args.load_img_to_memory)
-    val_loader = torch.utils.data.DataLoader(val_dataset,batch_size = args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=True) # 这个不必随机打乱
+    val_loader = torch.utils.data.DataLoader(val_dataset,batch_size = int(args.batch_size), shuffle=True, drop_last=True, num_workers=args.num_workers, pin_memory=True) 
 
     args.class_num = len(set(train_dataset.targets))
 
@@ -235,11 +236,15 @@ def train_e2e(epoch,train_loader, model, contrast, criterion, optimizer, args):
 
     return losses.avg, probs.avg
 
-
-
-def train_mem_bank(epoch,train_loader,val_distribution, model, criterion, kld_criterion, optimizer, args):
+class_mean = [torch.zeros(64).cuda() for i in range(4)]
+class_std = [torch.zeros(64).cuda() for i in range(4)]
+kld_loss = torch.Tensor([0]).cuda()
+loss = torch.Tensor([0]).cuda()
+def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterion, optimizer, args):
     model.train()
 
+    class_num = args.class_num
+    feat_dim = args.feat_dim
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -247,64 +252,134 @@ def train_mem_bank(epoch,train_loader,val_distribution, model, criterion, kld_cr
     kld_losses = AverageMeter()
 
     end = time.time()
-    for idx,(img, target, index) in enumerate(train_loader):
-        data_time.update(time.time() - end)
 
-        bsz = img.size(0)
-        img = img.float()
-        if torch.cuda.is_available():
-            index = index.cuda()
-            img = img.cuda()
+    class_feature = [torch.zeros((0,feat_dim)).cuda() for i in range(class_num)]
+    global kld_loss
+    global loss
 
-        only_save_feat = (epoch == 0)
-        # ===================forward=====================
-        feat = model(img)
-        loss = criterion(feat, target, index, only_save_feat)
-        
-        kld_loss = torch.Tensor([0]).cuda()
-        if epoch >= args.start_kld_loss_epoch:
-            batch_distribution = get_batch_mean_var(feat, target, args)
-            kld_loss = kld_criterion(val_distribution, batch_distribution)
+    if epoch < args.start_kld_loss_epoch or epoch % 2 == 0 or epoch == 1:
+        for idx,(img, target, index) in enumerate(train_loader):
+            data_time.update(time.time() - end)
 
-        total_loss = loss + args.kld_loss_lambda * kld_loss
+            bsz = img.size(0)
+            img = img.float()
+            if torch.cuda.is_available():
+                index = index.cuda()
+                img = img.cuda()
 
+            only_save_feat = (epoch == 0)
+            # ===================forward=====================
+            feat = model(img)
+            loss = criterion(feat, target, index, only_save_feat)
+            
+            
+            total_loss = loss
 
-        # ===================backward=====================
-        optimizer.zero_grad()
-        total_loss.backward()
-        optimizer.step()
+            # ===================backward=====================
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
 
-        # ===================meters=====================
-        losses.update(loss.item(), bsz)
-        total_losses.update(total_loss.item(),bsz)
-        kld_losses.update(kld_loss.item(),bsz)
+            total_loss = kld_loss + loss
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        batch_time.update(time.time() - end)
-        end = time.time()
+            for i in range(class_num):
+                tmp = feat[target == i, :].detach()
+                class_feature[i] = torch.cat((class_feature[i], tmp), dim = 0)
 
-        if epoch == 0: #如果在恢复期
-            print('Restoring memory bank: [{}/{}]\t'
-            'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-            'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
-            .format(idx + 1, len(train_loader), batch_time=batch_time,
-                   data_time=data_time))
-            sys.stdout.flush()
-            continue
+            # ===================meters=====================
+            losses.update(loss.item(), bsz)
+            total_losses.update(total_loss.item(),bsz)
+            kld_losses.update(kld_loss.item(),bsz)
 
-        # print info
-        if (idx + 1) % args.print_freq == 0:
-            print('Train: [{0}][{1}/{2}]\t'
-                  'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'contras_loss {loss.val:.3f} ({loss.avg:.3f})\t'
-                  'kld_loss {kld.val:.3f} ({kld.avg:.3f})\t'
-                  'total_loss {total.val:.3f} ({total.avg:.3f})\t'
-                  .format(
-                   epoch, idx + 1, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, kld = kld_losses, total = total_losses))
-            sys.stdout.flush()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if epoch == 0: #如果在恢复期
+                print('Restoring memory bank: [{}/{}]\t'
+                'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                .format(idx + 1, len(train_loader), batch_time=batch_time,
+                    data_time=data_time))
+                sys.stdout.flush()
+                continue
+
+            # print info
+            if (idx + 1) % args.print_freq == 0:
+                print('Train: [{0}][{1}/{2}]\t'
+                    'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                    'contras_loss {loss.val:.3f} ({loss.avg:.3f})\t'
+                    'kld_loss {kld.val:.3f} ({kld.avg:.3f})\t'
+                    'total_loss {total.val:.3f} ({total.avg:.3f})\t'
+                    .format(
+                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, kld = kld_losses, total = total_losses))
+                sys.stdout.flush()
+
+        for i in range(4):
+            res = class_feature[i]
+            class_mean[i] = torch.mean(res,dim = 0)
+            class_std[i] = torch.std(res, dim = 0)
+            
+    else:
+        for idx,(img, target, index) in enumerate(val_loader):
+            data_time.update(time.time() - end)
+
+            bsz = img.size(0)
+            img = img.float()
+            if torch.cuda.is_available():
+                index = index.cuda()
+                img = img.cuda()
+            # ===================forward=====================
+            feat = model(img)
+
+            kld_loss = torch.Tensor([0]).cuda()
+            val_distribution = get_batch_mean_var(feat, target, args)
+            
+            kld_loss = kld_criterion(val_distribution, [class_mean, class_std])
+            
+            total_loss = kld_loss
+
+            # ===================backward=====================
+            optimizer.zero_grad()
+            total_loss.backward()
+            optimizer.step()
+
+            total_loss = kld_loss + loss
+
+            # ===================meters=====================
+            losses.update(loss.item(), bsz)
+            total_losses.update(total_loss.item(),bsz)
+            kld_losses.update(kld_loss.item(),bsz)
+
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if epoch == 0: #如果在恢复期
+                print('Restoring memory bank: [{}/{}]\t'
+                'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                .format(idx + 1, len(val_loader), batch_time=batch_time,
+                    data_time=data_time))
+                sys.stdout.flush()
+                continue
+
+            # print info
+            if (idx + 1) % 1 == 0:
+                print('Train: [{0}][{1}/{2}]\t'
+                    'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                    'contras_loss {loss.val:.3f} ({loss.avg:.3f})\t'
+                    'kld_loss {kld.val:.3f} ({kld.avg:.3f})\t'
+                    'total_loss {total.val:.3f} ({total.avg:.3f})\t'
+                    .format(
+                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, kld = kld_losses, total = total_losses))
+                sys.stdout.flush()
 
     return losses.avg, kld_losses.avg, total_losses.avg
 
@@ -337,14 +412,12 @@ def main():
     for epoch in range(args.start_epoch, args.epochs + 1):
         adjust_learning_rate(epoch, args, optimizer)
 
-        val_distribution = []
-        if epoch >= args.start_kld_loss_epoch:
-            val_distribution = get_dataloader_mean_var(model, val_loader, args)
+        
 
         if args.contrastMethod == 'e2e':
             loss, prob = train_e2e(epoch, train_loader, model, criterion, optimizer, args)
         else:
-            contras_loss, kld_loss, total_loss = train_mem_bank(epoch, train_loader,val_distribution, model, criterion, kld_criterion, optimizer, args)
+            contras_loss, kld_loss, total_loss = train_mem_bank(epoch, train_loader,val_loader, model, criterion, kld_criterion, optimizer, args)
 
         print_running_time(start_time)
         if epoch == 0: 

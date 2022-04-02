@@ -57,7 +57,7 @@ def set_model(args):
 def set_dataloader(args):
     # Data loading code
     traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
+    valdir = os.path.join(args.data, 'test')
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
 
     train_dataset = datasets.ImageFolder(
@@ -196,7 +196,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.feat_dim = 64
-    args.pretrained = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/modelPath/20220401_11_51_45_PosNum_600_NegNum_1200_lr_0.03_decay_0.0001_bsz_128_featDim_64_/ckpt_epoch_100.pth'
+    args.pretrained = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/modelPath/20220402_06_10_06_PosNum_1200_NegNum_2400_lr_0.03_decay_0.0001_bsz_128_featDim_64_/ckpt_epoch_150.pth'
     args.data = '/home/hsc/Research/TrafficSceneClassification/data/fineGrain/dataset5'
     start = time.time()
     process_feature(args)

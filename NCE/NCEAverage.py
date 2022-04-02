@@ -70,8 +70,8 @@ class kld_Criterion(nn.Module):
         class_num = len(val_distribution[0])
         total_loss = 0
         for i in range(class_num):
-            mean1 = torch.Tensor(val_distribution[0][i]).cuda()
-            sigma1 = torch.Tensor(val_distribution[1][i]).cuda()
+            mean1 = val_distribution[0][i]
+            sigma1 = val_distribution[1][i]
 
             mean2 = batch_distribution[0][i]
             sigma2 = batch_distribution[1][i]
