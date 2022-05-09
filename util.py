@@ -5,6 +5,7 @@ import time
 import sys
 import os
 from scipy.spatial import distance
+import torch.nn.functional as F
 
 
 def get_dataloader_mean_var(model, data_loader, args) -> list:
@@ -44,6 +45,36 @@ def get_batch_mean_var(feature, target, args) -> list:
         class_mean.append(c_mean)
         class_std.append(c_std)
     return [class_mean, class_std]
+
+
+
+def batch_classify(batch_feat, gt,class_mean):
+    bsz = batch_feat.shape[0]
+    class_num = len(class_mean)
+    pred = torch.zeros((bsz),dtype=torch.int)
+    max_sims = torch.zeros((bsz))
+    for i in range(bsz):
+        cur_feat = batch_feat[i,:]
+        max_sim = -100
+        p = 0
+        for j in range(class_num):
+            center = class_mean[j]
+            cur_sim = torch.sum(center * cur_feat) / (torch.sqrt(torch.sum(torch.pow(center,2))) * torch.sqrt(torch.sum(torch.pow(cur_feat,2))))
+            if cur_sim > max_sim:
+                max_sim = cur_sim
+                p = j
+        max_sims[i] = max_sim
+        pred[i] = p
+    sorted, indices = torch.sort(max_sims, descending=True)
+    tmp = max_sims[gt != pred]
+    tmp,_ = torch.sort(tmp,descending=True)
+    mid = sorted[int(bsz/2)]
+    # pred[max_sims < mid] = class_num
+    return pred
+
+        
+
+
 
 def print_running_time(start_time):
     print()

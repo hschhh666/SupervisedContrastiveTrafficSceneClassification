@@ -22,7 +22,7 @@ from NCE.NCEAverage import NCEAverage, E2EAverage, SupConLoss, kld_Criterion
 from NCE.NCECriterion import NCECriterion
 from NCE.NCECriterion import NCESoftmaxLoss
 
-from util import adjust_learning_rate, AverageMeter,print_running_time, Logger, get_dataloader_mean_var, get_batch_mean_var
+from util import adjust_learning_rate, AverageMeter,print_running_time, Logger, get_dataloader_mean_var, get_batch_mean_var, batch_classify
 from sampleIdx import RandomBatchSamplerWithPosAndNeg
 from processFeature import process_feature
 import tensorboard_logger as tb_logger
@@ -58,6 +58,8 @@ def parse_option():
     parser.add_argument('--feat_dim', type=int, default=64, help='dim of feat for inner product') # dimension of network's output
     parser.add_argument('--start_kld_loss_epoch', type=int, default=1) # 从哪个epoch开始优化kld loss
     parser.add_argument('--kld_loss_lambda', type=float, default=1) # kld loss的权重, total loss = contra_loss + lambda * kld_loss
+    parser.add_argument('--kld_loss_interval', type=float, default=2) # epoch整除它时训练kld
+    # parser.add_argument('--kld_batch_break', action='store_true')
 
     # specify folder
     parser.add_argument('--data', type=str, default=None, help='path to training data') # 训练数据文件夹，即锚点/正负样本文件夹
@@ -145,7 +147,7 @@ def get_data_loader(args):
         train_loader = torch.utils.data.DataLoader(train_dataset,batch_size = args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=True)
     
     val_dataset = myImageFolder(val_data, transform=augmentation, memory = args.load_img_to_memory)
-    val_loader = torch.utils.data.DataLoader(val_dataset,batch_size = int(args.batch_size), shuffle=True, drop_last=True, num_workers=args.num_workers, pin_memory=True) 
+    val_loader = torch.utils.data.DataLoader(val_dataset,batch_size = int(args.batch_size), shuffle=True, drop_last=False, num_workers=args.num_workers, pin_memory=True) 
 
     args.class_num = len(set(train_dataset.targets))
 
@@ -238,8 +240,8 @@ def train_e2e(epoch,train_loader, model, contrast, criterion, optimizer, args):
 
 class_mean = [torch.zeros(64).cuda() for i in range(4)]
 class_std = [torch.zeros(64).cuda() for i in range(4)]
-kld_loss = torch.Tensor([0]).cuda()
-loss = torch.Tensor([0]).cuda()
+kld_loss = 0
+loss = 0
 def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterion, optimizer, args):
     model.train()
 
@@ -257,7 +259,7 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
     global kld_loss
     global loss
 
-    if epoch < args.start_kld_loss_epoch or epoch % 2 == 0 or epoch == 1:
+    if epoch < args.start_kld_loss_epoch or epoch % args.kld_loss_interval != 0 or epoch == 1:
         for idx,(img, target, index) in enumerate(train_loader):
             data_time.update(time.time() - end)
 
@@ -273,14 +275,12 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
             loss = criterion(feat, target, index, only_save_feat)
             
             
-            total_loss = loss
 
             # ===================backward=====================
             optimizer.zero_grad()
-            total_loss.backward()
+            loss.backward()
             optimizer.step()
 
-            total_loss = kld_loss + loss
 
             for i in range(class_num):
                 tmp = feat[target == i, :].detach()
@@ -288,8 +288,8 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
 
             # ===================meters=====================
             losses.update(loss.item(), bsz)
-            total_losses.update(total_loss.item(),bsz)
-            kld_losses.update(kld_loss.item(),bsz)
+            total_losses.update(loss.item() + kld_loss,bsz)
+            kld_losses.update(kld_loss,bsz)
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -306,7 +306,7 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
                 continue
 
             # print info
-            if (idx + 1) % args.print_freq == 0:
+            if (idx + 1) % args.print_freq == 0 or (idx + 1) == len(train_loader):
                 print('Train: [{0}][{1}/{2}]\t'
                     'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                     'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -322,8 +322,24 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
             res = class_feature[i]
             class_mean[i] = torch.mean(res,dim = 0)
             class_std[i] = torch.std(res, dim = 0)
-            
+
+        loss = losses.avg
+
     else:
+        total_pred = torch.zeros(len(val_loader.dataset),dtype=torch.int32)
+        for idx,(img, target, index) in enumerate(val_loader):
+            data_time.update(time.time() - end)
+            bsz = img.size(0)
+            img = img.float()
+            if torch.cuda.is_available():
+                index = index.cuda()
+                img = img.cuda()
+            # ===================forward=====================
+            with torch.no_grad():
+                feat = model(img)
+                pred = batch_classify(feat, target,class_mean)
+                total_pred[index] = pred
+
         for idx,(img, target, index) in enumerate(val_loader):
             data_time.update(time.time() - end)
 
@@ -335,23 +351,21 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
             # ===================forward=====================
             feat = model(img)
 
-            kld_loss = torch.Tensor([0]).cuda()
-            val_distribution = get_batch_mean_var(feat, target, args)
+            pred = total_pred[index]
+            val_distribution = get_batch_mean_var(feat, pred, args)
             
             kld_loss = kld_criterion(val_distribution, [class_mean, class_std])
             
-            total_loss = kld_loss
 
             # ===================backward=====================
             optimizer.zero_grad()
-            total_loss.backward()
+            kld_loss.backward()
             optimizer.step()
 
-            total_loss = kld_loss + loss
 
             # ===================meters=====================
-            losses.update(loss.item(), bsz)
-            total_losses.update(total_loss.item(),bsz)
+            losses.update(loss, bsz)
+            total_losses.update(kld_loss.item() + loss, bsz)
             kld_losses.update(kld_loss.item(),bsz)
 
             if torch.cuda.is_available():
@@ -369,7 +383,7 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
                 continue
 
             # print info
-            if (idx + 1) % 1 == 0:
+            if (idx + 1) % 1 == 0 or (idx + 1) == len(val_loader):
                 print('Train: [{0}][{1}/{2}]\t'
                     'BT {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                     'DT {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -377,9 +391,11 @@ def train_mem_bank(epoch,train_loader,val_loader, model, criterion, kld_criterio
                     'kld_loss {kld.val:.3f} ({kld.avg:.3f})\t'
                     'total_loss {total.val:.3f} ({total.avg:.3f})\t'
                     .format(
-                    epoch, idx + 1, len(train_loader), batch_time=batch_time,
+                    epoch, idx + 1, len(val_loader), batch_time=batch_time,
                     data_time=data_time, loss=losses, kld = kld_losses, total = total_losses))
                 sys.stdout.flush()
+
+        kld_loss = kld_losses.avg
 
     return losses.avg, kld_losses.avg, total_losses.avg
 
@@ -446,10 +462,10 @@ def main():
             # help release GPU memory
             del state
 
-        if total_loss < min_loss:
+        if contras_loss < min_loss:
             if min_loss != np.inf:
                 os.remove(best_model_path)
-            min_loss = total_loss
+            min_loss = contras_loss
             best_model_path = os.path.join(args.model_folder, 'ckpt_epoch_{epoch}_Best.pth'.format(epoch=epoch))
             print('==> Saving best model...')
             state = {
