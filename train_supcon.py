@@ -25,6 +25,7 @@ from NCE.NCECriterion import NCESoftmaxLoss
 from util import adjust_learning_rate, AverageMeter,print_running_time, Logger, get_dataloader_mean_var, get_batch_mean_var, batch_classify
 from sampleIdx import RandomBatchSamplerWithPosAndNeg
 from processFeature import process_feature
+from processVideo import process_video
 import tensorboard_logger as tb_logger
 
 
@@ -486,6 +487,7 @@ def main():
     args.pretrained = best_model_path
     
     process_feature(args)
+    process_video(args)
 
     print('Program exit normally.')
 
