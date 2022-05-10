@@ -68,6 +68,7 @@ def parse_option():
     parser.add_argument('--test_data_folder', type=str, default=None, help='path to testing data') # 测试数据文件夹，即所有视频帧的文件夹
     parser.add_argument('--running_save_path', type=str, default=None, help='path to save data')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',help='path to latest checkpoint (default: none)')
+    parser.add_argument('--video_path',type=str, default=None) #训练结束后计算视频的特征，这里指定视频所在的文件夹
 
     # 其他参数
     parser.add_argument('--comment_info', type=str, default='', help='Comment message, donot influence program')
@@ -487,13 +488,9 @@ def main():
     print('min loss = %.3f'%min_loss)
     args.pretrained = best_model_path
     
-    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     process_feature(args)
-    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     evaluation(args)
-    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     process_video(args)
-    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     print('Program exit normally.')
 
 if __name__ == '__main__':

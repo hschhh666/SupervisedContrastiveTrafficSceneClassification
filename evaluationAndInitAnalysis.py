@@ -6,12 +6,12 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
-from util import Logger
+from util import Logger, print_time
 from sklearn.metrics import classification_report
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import argparse
 
-
+@print_time
 def evaluation(args):
     # 指定路径
     dataset_path = args.data

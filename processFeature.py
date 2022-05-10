@@ -21,7 +21,7 @@ from sklearn.metrics import classification_report
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from torchvision.transforms.transforms import Resize
-from util import Logger,print_running_time
+from util import Logger,print_running_time, print_time
 from myModel import myResnet50
 
 
@@ -136,7 +136,7 @@ def vis_feat(feat, targets, save_name, args):
     plt.title('Feature visualization by tsne')
     plt.savefig(os.path.join(args.result_path, save_name))
 
-
+@print_time
 def process_feature(args): # 其实这个函数就相当于主程序了
     # 设置保存文件的路径
     args.result_path = ('/').join(((args.pretrained).split('/'))[:-1])

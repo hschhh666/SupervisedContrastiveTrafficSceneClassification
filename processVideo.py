@@ -24,16 +24,19 @@ from sklearn.metrics import classification_report
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from torchvision.transforms.transforms import Resize
-from util import Logger,print_running_time
+from util import Logger,print_running_time, print_time
 from myModel import myResnet50
 from PIL import Image
 
 
+@print_time
 def process_video(args):
-    video_path = '/home/hsc/Research/TrafficSceneClassification/data/video/finGrain'
+    if args.video_path is None: return 
 
+    video_path = args.video_path
 
     mp4_file = []
+    
     for _,_,file in os.walk(video_path):
         for i in file:
             if i.endswith('mp4'):
@@ -189,4 +192,6 @@ if __name__ == '__main__':
 
     args.pretrained = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/modelPath/20220427_21_04_29_PosNum_30_NegNum_1200_lr_0.03_decay_0.0001_bsz_128_featDim_64_dataset5witSmallClass/ckpt_epoch_180_Best.pth'
     # args.pretrained = '/home/hsc/Research/TrafficSceneClassification/runningSavePathSupCon/modelPath/20220402_04_29_07_PosNum_1200_NegNum_1200_lr_0.03_decay_0.0001_bsz_128_featDim_64_/ckpt_epoch_150_Best.pth'
+
+    args.video_path = '/home/hsc/Research/TrafficSceneClassification/data/video/tmp'
     process_video(args)
