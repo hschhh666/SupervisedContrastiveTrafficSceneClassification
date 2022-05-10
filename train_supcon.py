@@ -26,6 +26,7 @@ from util import adjust_learning_rate, AverageMeter,print_running_time, Logger, 
 from sampleIdx import RandomBatchSamplerWithPosAndNeg
 from processFeature import process_feature
 from processVideo import process_video
+from evaluationAndInitAnalysis import evaluation
 import tensorboard_logger as tb_logger
 
 
@@ -486,9 +487,13 @@ def main():
     print('min loss = %.3f'%min_loss)
     args.pretrained = best_model_path
     
+    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     process_feature(args)
+    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+    evaluation(args)
+    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     process_video(args)
-
+    print('Time is ',time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
     print('Program exit normally.')
 
 if __name__ == '__main__':
