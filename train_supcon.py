@@ -65,7 +65,6 @@ def parse_option():
 
     # specify folder
     parser.add_argument('--data', type=str, default=None, help='path to training data') # 训练数据文件夹，即锚点/正负样本文件夹
-    parser.add_argument('--test_data_folder', type=str, default=None, help='path to testing data') # 测试数据文件夹，即所有视频帧的文件夹
     parser.add_argument('--running_save_path', type=str, default=None, help='path to save data')
     parser.add_argument('--resume', default='', type=str, metavar='PATH',help='path to latest checkpoint (default: none)')
     parser.add_argument('--video_path',type=str, default=None) #训练结束后计算视频的特征，这里指定视频所在的文件夹
@@ -89,8 +88,8 @@ def parse_option():
     args.log_txt_path = os.path.join(args.running_save_path, 'logPath')
     args.result_path = os.path.join(args.running_save_path, 'resultPath')
     args.tb_folder = os.path.join(args.running_save_path, 'tbPath')
-    if (args.data is None) or (args.model_path is None)  or (args.log_txt_path is None) or (args.result_path is None) or (args.test_data_folder is None):
-        raise ValueError('one or more of the folders is None: data | model_path | log_txt_path | result_path | test_data_folder')
+    if (args.data is None) or (args.model_path is None)  or (args.log_txt_path is None) or (args.result_path is None):
+        raise ValueError('one or more of the folders is None: data | model_path | log_txt_path | result_path')
     if not os.path.isdir(args.data):
         raise ValueError('data path not exist: {}'.format(args.data))
 
